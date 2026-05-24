@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Map Diary">
+  <rect width="512" height="512" rx="104" fill="#dceeb1"/>
+  <path d="M120 126h272c22.1 0 40 17.9 40 40v180c0 22.1-17.9 40-40 40H120c-22.1 0-40-17.9-40-40V166c0-22.1 17.9-40 40-40Z" fill="#fff"/>
+  <path d="M145 180c44-30 90-26 137 10 40 30 72 32 103 8v126c-39 28-78 24-119-8-43-33-83-35-121-8V180Z" fill="#f4ecd6" stroke="#000" stroke-width="18" stroke-linejoin="round"/>
+  <path d="M256 175c-38 0-68 29-68 66 0 52 68 110 68 110s68-58 68-110c0-37-30-66-68-66Zm0 94c-16 0-28-12-28-28s12-28 28-28 28 12 28 28-12 28-28 28Z" fill="#000"/>
+</svg>

@@ -1,0 +1,209 @@
+@import "tailwindcss";
+
+:root {
+  --primary: #000000;
+  --on-primary: #ffffff;
+  --ink: #000000;
+  --canvas: #ffffff;
+  --inverse-canvas: #000000;
+  --inverse-ink: #ffffff;
+  --hairline: #e6e6e6;
+  --hairline-soft: #f1f1f1;
+  --surface-soft: #f7f7f5;
+  --block-lime: #dceeb1;
+  --block-lilac: #c5b0f4;
+  --block-cream: #f4ecd6;
+  --block-pink: #efd4d4;
+  --block-mint: #c8e6cd;
+  --block-coral: #f3c9b6;
+  --block-navy: #1f1d3d;
+  --accent-magenta: #ff3d8b;
+  --semantic-success: #1ea64a;
+  --semantic-danger: #bc3636;
+  --radius-xs: 2px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 24px;
+  --radius-xl: 32px;
+  --radius-pill: 50px;
+  --font-figma-sans: figmaSans, "SF Pro Display", ui-sans-serif, system-ui,
+    -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  --font-figma-mono: figmaMono, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@theme inline {
+  --font-sans: var(--font-figma-sans);
+  --font-mono: var(--font-figma-mono);
+  --color-canvas: var(--canvas);
+  --color-ink: var(--ink);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--font-figma-sans);
+  font-feature-settings: "kern";
+}
+
+body {
+  min-height: 100dvh;
+  background: var(--canvas);
+  color: var(--ink);
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+img {
+  display: block;
+  max-width: 100%;
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.map-shell {
+  min-height: 520px;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: var(--radius-lg);
+  background: var(--surface-soft);
+}
+
+.diary-leaflet-map {
+  height: 100%;
+  min-height: 520px;
+  width: 100%;
+  cursor: crosshair;
+}
+
+.map-shell.fullscreen-map {
+  min-height: 0;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+}
+
+.map-shell.fullscreen-map .diary-leaflet-map {
+  min-height: 0;
+  height: 100%;
+}
+
+.leaflet-container {
+  background: var(--surface-soft);
+  color: var(--ink);
+  font-family: var(--font-figma-sans);
+}
+
+.leaflet-pane,
+.leaflet-tile,
+.leaflet-marker-icon,
+.leaflet-marker-shadow,
+.leaflet-tile-container,
+.leaflet-pane > svg,
+.leaflet-pane > canvas,
+.leaflet-zoom-box,
+.leaflet-image-layer,
+.leaflet-layer {
+  outline: none;
+}
+
+.leaflet-control-container {
+  display: none;
+}
+
+.leaflet-tooltip {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  background: var(--canvas);
+  color: var(--ink);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+  padding: 6px 10px;
+}
+
+.diary-pin-tooltip {
+  padding: 6px;
+}
+
+.leaflet-tooltip-top::before {
+  display: none;
+}
+
+.diary-marker {
+  display: grid;
+  place-items: center;
+  border-radius: 9999px;
+  background: var(--canvas);
+  border: 1px solid var(--ink);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+
+.diary-marker-inner {
+  display: grid;
+  height: 24px;
+  width: 24px;
+  place-items: center;
+  border-radius: 9999px;
+  background: var(--marker-color, var(--primary));
+  color: var(--on-primary);
+}
+
+.diary-marker-inner svg {
+  height: 15px;
+  width: 15px;
+}
+
+.diary-marker.is-selected {
+  border-color: var(--accent-magenta);
+}
+
+.diary-marker.is-selected .diary-marker-inner {
+  background: var(--accent-magenta);
+}
+
+.mini-map {
+  height: 100%;
+  width: 100%;
+}
+
+@media (max-width: 768px) {
+  .map-shell,
+  .diary-leaflet-map {
+    min-height: 360px;
+  }
+
+  .map-shell {
+    border-radius: var(--radius-md);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+  }
+}

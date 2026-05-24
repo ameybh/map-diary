@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Map Diary">
+  <rect width="512" height="512" fill="#dceeb1"/>
+  <rect x="64" y="92" width="384" height="328" rx="72" fill="#ffffff"/>
+  <path d="M132 188c50-36 101-33 153 7 45 34 81 37 119 9v124c-44 31-88 27-133-7-48-37-93-39-139-8V188Z" fill="#f4ecd6" stroke="#000000" stroke-width="18" stroke-linejoin="round"/>
+  <path d="M256 160c-43 0-78 34-78 76 0 59 78 126 78 126s78-67 78-126c0-42-35-76-78-76Zm0 108c-18 0-32-14-32-32s14-32 32-32 32 14 32 32-14 32-32 32Z" fill="#000000"/>
+</svg>
