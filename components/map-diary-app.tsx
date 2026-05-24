@@ -63,7 +63,7 @@ import type {
   ThemeSettings,
   ViewId
 } from "@/lib/types";
-import { cleanText, createId, formatBytes, formatDate, formatLatLng, initials } from "@/lib/utils";
+import { cleanText, cn, createId, formatBytes, formatDate, formatLatLng, initials } from "@/lib/utils";
 
 const views: Array<{ id: ViewId; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { id: "map", label: "Map", icon: Map },
@@ -123,6 +123,20 @@ type PlaceFilter = "all" | "private" | "shared" | "with-photos";
 interface MapDiaryAppProps {
   initialUser: AuthUserSummary | null;
   supabaseConfigured: boolean;
+}
+
+function BrandMark({ className = "size-11" }: { className?: string }) {
+  return (
+    <span
+      className={cn(
+        "grid shrink-0 place-items-center overflow-hidden rounded-[var(--radius-lg)] border border-[var(--hairline)] bg-[var(--canvas)]",
+        className
+      )}
+      aria-hidden="true"
+    >
+      <Image src="/icon.svg" alt="" width={44} height={44} priority className="size-full object-cover" />
+    </span>
+  );
 }
 
 export function MapDiaryApp({ initialUser, supabaseConfigured }: MapDiaryAppProps) {
@@ -892,9 +906,7 @@ function LoginScreen({ onUseLocal }: { onUseLocal: () => void }) {
     <main className="grid min-h-[100dvh] place-items-center bg-[var(--surface-soft)] px-4">
       <section className="grid w-full max-w-[760px] gap-6 rounded-[24px] border border-[var(--hairline)] bg-[var(--canvas)] p-8 shadow-[0_24px_80px_rgba(0,0,0,0.08)] max-md:p-5">
         <div className="flex items-center gap-3">
-          <span className="grid size-11 place-items-center rounded-full bg-[var(--primary)] font-bold text-[var(--on-primary)]">
-            MD
-          </span>
+          <BrandMark />
           <div>
             <p className="font-mono text-xs uppercase">Map Diary</p>
             <h1 className="text-4xl font-[340] leading-none max-md:text-3xl">Private places, synced everywhere</h1>
@@ -954,9 +966,7 @@ function SideNav({
   return (
     <aside className="z-[700] flex w-[268px] shrink-0 flex-col border-r border-[var(--hairline)] bg-[var(--canvas)] p-4 max-md:hidden">
       <button className="mb-8 flex items-center gap-3 text-left" onClick={() => onViewChange("map")} aria-label="Map Diary home">
-        <span className="grid size-11 place-items-center rounded-full bg-[var(--primary)] text-sm font-bold text-[var(--on-primary)]">
-          MD
-        </span>
+        <BrandMark />
         <span>
           <strong className="block text-xl leading-tight">Map Diary</strong>
           <span className="text-sm text-black/60">@{user.username}</span>

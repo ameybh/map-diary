@@ -6,6 +6,11 @@ export const metadata: Metadata = {
   title: "Map Diary",
   description:
     "A private local-first map scrapbook for places, notes, photos, friends, and shared travel memories.",
+  icons: {
+    icon: "/icon.svg",
+    shortcut: "/icon.svg",
+    apple: "/icon.svg"
+  },
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
