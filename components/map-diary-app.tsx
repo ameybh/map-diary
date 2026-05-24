@@ -33,6 +33,12 @@ import { Input, Label, Select, Textarea } from "@/components/ui/form-controls";
 import { MiniMap } from "@/components/world-map";
 import { mirrorToCloud, readState, writeState } from "@/lib/local-store";
 import { cityAtlas, type DraftLocation } from "@/lib/map";
+import {
+  captureClientEvent,
+  captureClientException,
+  identifyPostHogUser,
+  resetPostHogUser
+} from "@/lib/posthog/client";
 import { CURRENT_USER_ID, directory, normalizeState } from "@/lib/seed";
 import { createClient as createSupabaseBrowserClient } from "@/lib/supabase/client";
 import {
@@ -145,6 +151,22 @@ export function MapDiaryApp({ initialUser, supabaseConfigured }: MapDiaryAppProp
     setToast(message);
     window.setTimeout(() => setToast(""), 2200);
   }, []);
+
+  React.useEffect(() => {
+    if (initialUser) {
+      identifyPostHogUser(initialUser);
+    }
+  }, [initialUser]);
+
+  function captureAppEvent(event: string, properties?: Record<string, unknown>) {
+    captureClientEvent(event, {
+      user_id: userId,
+      is_authenticated: isAuthenticated,
+      cloud_mode: canUseCloud,
+      demo_mode: demoMode,
+      ...properties
+    });
+  }
 
   React.useEffect(() => {
     let cancelled = false;
@@ -286,20 +308,32 @@ export function MapDiaryApp({ initialUser, supabaseConfigured }: MapDiaryAppProp
         await writeState(synced);
         channelRef.current?.postMessage({ type: "state-updated", updatedAt: synced.updatedAt });
       } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Sync failed";
         const failed: AppState = {
           ...syncing,
           sync: {
             ...syncing.sync,
             status: "error",
-            error: error instanceof Error ? error.message : "Sync failed"
+            error: errorMessage
           }
         };
         setState(failed);
         await writeState(failed);
+        captureClientEvent("sync_failed", {
+          user_id: userId,
+          cloud_mode: canUseCloud,
+          remote: snapshot.sync.remote,
+          pending_changes: snapshot.sync.pendingChanges,
+          error_message: errorMessage
+        });
+        captureClientException(error, {
+          feature: "sync",
+          remote: snapshot.sync.remote
+        });
         showToast("Sync failed");
       }
     },
-    [canUseCloud, isOnline, showToast]
+    [canUseCloud, isOnline, showToast, userId]
   );
 
   const persist = React.useCallback(
@@ -406,10 +440,22 @@ export function MapDiaryApp({ initialUser, supabaseConfigured }: MapDiaryAppProp
           ? current.entries.map((item) => (item.id === existing.id ? entry : item))
           : [...current.entries, entry]
       }), entryDraft.id ? "Entry updated" : "Place saved");
+      captureAppEvent("place_saved", {
+        action: existing ? "updated" : "created",
+        visibility: entry.visibility,
+        mate_count: entry.mates.length,
+        photo_count: entry.photos.length,
+        uploaded_photo_count: Array.from(files ?? []).filter((file) => file.type.startsWith("image/")).length,
+        has_note: Boolean(entry.note.trim())
+      });
       setSelectedEntryId(entry.id);
       setDraftLocation(null);
       setActiveView("map");
     } catch (error) {
+      captureClientException(error, {
+        feature: "place_save",
+        action: existing ? "updated" : "created"
+      });
       showToast(error instanceof Error ? error.message : "Could not save place");
     }
   }
@@ -431,9 +477,18 @@ export function MapDiaryApp({ initialUser, supabaseConfigured }: MapDiaryAppProp
         }),
         "Entry deleted"
       );
+      captureAppEvent("place_deleted", {
+        visibility: entry.visibility,
+        mate_count: entry.mates.length,
+        photo_count: entry.photos.length
+      });
       setSelectedEntryId(null);
       setDraftLocation(null);
     } catch (error) {
+      captureClientException(error, {
+        feature: "place_delete",
+        entry_owner: entry.ownerId === userId ? "self" : "other"
+      });
       showToast(error instanceof Error ? error.message : "Could not delete entry");
     }
   }
@@ -464,7 +519,15 @@ export function MapDiaryApp({ initialUser, supabaseConfigured }: MapDiaryAppProp
         }),
         "Photo removed"
       );
+      captureAppEvent("photo_removed", {
+        had_storage_path: Boolean(photo.storagePath),
+        remaining_photo_count: Math.max(0, entry.photos.length - 1)
+      });
     } catch (error) {
+      captureClientException(error, {
+        feature: "photo_remove",
+        had_storage_path: Boolean(photo.storagePath)
+      });
       showToast(error instanceof Error ? error.message : "Could not remove photo");
     }
   }
@@ -484,7 +547,15 @@ export function MapDiaryApp({ initialUser, supabaseConfigured }: MapDiaryAppProp
         }),
         "Friend added"
       );
+      captureAppEvent("friend_added", {
+        source: canUseCloud && isUuid(friend.id) ? "cloud_directory" : "local_directory",
+        existing_friend_count: state?.friends.length ?? 0
+      });
     } catch (error) {
+      captureClientException(error, {
+        feature: "friend_add",
+        source: canUseCloud && isUuid(friend.id) ? "cloud_directory" : "local_directory"
+      });
       showToast(error instanceof Error ? error.message : "Could not add friend");
     }
   }
@@ -508,7 +579,15 @@ export function MapDiaryApp({ initialUser, supabaseConfigured }: MapDiaryAppProp
         }),
         "Account saved"
       );
+      captureAppEvent("profile_updated", {
+        feed_visible: nextProfile.feedVisible,
+        private_by_default: nextProfile.privateByDefault,
+        has_email: Boolean(nextProfile.email)
+      });
     } catch (error) {
+      captureClientException(error, {
+        feature: "profile_save"
+      });
       showToast(error instanceof Error ? error.message : "Could not save account");
     }
   }
@@ -533,12 +612,26 @@ export function MapDiaryApp({ initialUser, supabaseConfigured }: MapDiaryAppProp
           theme
         }
       }));
+      captureAppEvent("theme_updated", {
+        changed_keys: Object.keys(themePatch),
+        map_style: theme.mapStyle,
+        font_family: theme.fontFamily
+      });
     } catch (error) {
+      captureClientException(error, {
+        feature: "theme_save",
+        changed_keys: Object.keys(themePatch)
+      });
       showToast(error instanceof Error ? error.message : "Could not save style");
     }
   }
 
-  function openLocationDraft(location: DraftLocation) {
+  function openLocationDraft(location: DraftLocation, source: "map_click" | "search") {
+    captureAppEvent("place_draft_started", {
+      source,
+      place_source: source === "search" ? "offline_city_atlas" : "map_click",
+      has_existing_entries: visibleEntries.length > 0
+    });
     setDraftLocation(location);
     setSelectedEntryId(null);
     setActiveView("map");
@@ -575,7 +668,14 @@ export function MapDiaryApp({ initialUser, supabaseConfigured }: MapDiaryAppProp
           await installPrompt.prompt();
           setInstallPrompt(null);
         }}
-        onSync={() => runSync(state)}
+        onSync={() => {
+          captureAppEvent("sync_requested", {
+            source: "side_nav",
+            pending_changes: state.sync.pendingChanges,
+            sync_status: state.sync.status
+          });
+          void runSync(state);
+        }}
         onViewChange={(view) => {
           setActiveView(view);
           if (view !== "map") {
@@ -594,9 +694,7 @@ export function MapDiaryApp({ initialUser, supabaseConfigured }: MapDiaryAppProp
           mapStyle={state.settings.theme.mapStyle}
           className="fullscreen-map absolute inset-0"
           onPickLocation={(location) => {
-            setDraftLocation(location);
-            setSelectedEntryId(null);
-            setActiveView("map");
+            openLocationDraft(location, "map_click");
           }}
           onSelectEntry={(entryId) => {
             setSelectedEntryId(entryId);
@@ -613,7 +711,7 @@ export function MapDiaryApp({ initialUser, supabaseConfigured }: MapDiaryAppProp
           locationQuery={locationQuery}
           locationMatches={locationMatches}
           onLocationQueryChange={setLocationQuery}
-          onChooseLocation={openLocationDraft}
+          onChooseLocation={(location) => openLocationDraft(location, "search")}
           onAddPlace={() => {
             setActiveView("map");
             setSelectedEntryId(null);
@@ -718,12 +816,32 @@ export function MapDiaryApp({ initialUser, supabaseConfigured }: MapDiaryAppProp
             supabaseConfigured={supabaseConfigured}
             onProfileSave={(profile) => void saveProfile(profile)}
             onThemeChange={(theme) => void saveTheme(theme)}
-            onSync={() => runSync(state)}
-            onExport={() => exportData(state)}
+            onSync={() => {
+              captureAppEvent("sync_requested", {
+                source: "settings",
+                pending_changes: state.sync.pendingChanges,
+                sync_status: state.sync.status
+              });
+              void runSync(state);
+            }}
+            onExport={() => {
+              captureAppEvent("data_exported", {
+                entry_count: state.entries.length,
+                friend_count: state.friends.length,
+                photo_count: state.entries.reduce((total, entry) => total + entry.photos.length, 0)
+              });
+              exportData(state);
+            }}
             onImport={async (file) => {
               const imported = normalizeState(JSON.parse(await file.text()) as Partial<AppState>);
               setState(imported);
               await writeState(imported);
+              captureAppEvent("data_imported", {
+                file_size: file.size,
+                entry_count: imported.entries.length,
+                friend_count: imported.friends.length,
+                photo_count: imported.entries.reduce((total, entry) => total + entry.photos.length, 0)
+              });
               showToast("Data imported");
             }}
           />
@@ -750,6 +868,9 @@ function LoginScreen({ onUseLocal }: { onUseLocal: () => void }) {
   async function signInWithGoogle() {
     setLoading(true);
     setError("");
+    captureClientEvent("oauth_login_started", {
+      provider: "google"
+    });
     const supabase = createSupabaseBrowserClient();
     const { error: loginError } = await supabase.auth.signInWithOAuth({
       provider: "google",
@@ -758,6 +879,10 @@ function LoginScreen({ onUseLocal }: { onUseLocal: () => void }) {
       }
     });
     if (loginError) {
+      captureClientException(loginError, {
+        feature: "oauth_login",
+        provider: "google"
+      });
       setError(loginError.message);
       setLoading(false);
     }
@@ -784,7 +909,16 @@ function LoginScreen({ onUseLocal }: { onUseLocal: () => void }) {
             <Cloud className="size-4" />
             {loading ? "Opening Google" : "Continue with Google"}
           </Button>
-          <Button variant="secondary" onClick={onUseLocal}>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              captureClientEvent("local_mode_started", {
+                source: "login_screen"
+              });
+              resetPostHogUser();
+              onUseLocal();
+            }}
+          >
             Use local mode
           </Button>
         </div>
@@ -858,7 +992,7 @@ function SideNav({
           </Button>
         ) : null}
         {isAuthenticated ? (
-          <form action="/auth/logout" method="post">
+          <form action="/auth/logout" method="post" onSubmit={resetPostHogUser}>
             <Button type="submit" variant="secondary" className="w-full justify-start">
               <LogOut className="size-4" />
               Log out
