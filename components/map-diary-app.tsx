@@ -29,6 +29,13 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Drawer,
+  DrawerContent,
+  DrawerOverlay,
+  DrawerPortal,
+  DrawerTitle
+} from "@/components/ui/drawer";
 import { Input, Label, Select, Textarea } from "@/components/ui/form-controls";
 import { MiniMap } from "@/components/world-map";
 import { mirrorToCloud, readState, writeState } from "@/lib/local-store";
@@ -145,6 +152,7 @@ export function MapDiaryApp({ initialUser, supabaseConfigured }: MapDiaryAppProp
   const userId = initialUser?.id ?? CURRENT_USER_ID;
   const isAuthenticated = Boolean(initialUser);
   const canUseCloud = Boolean(initialUser && supabaseConfigured && !demoMode);
+  const isMobile = useIsMobile();
   useGoogleFont(state?.settings.theme.fontFamily ?? "Figtree");
 
   const showToast = React.useCallback((message: string) => {
@@ -394,8 +402,6 @@ export function MapDiaryApp({ initialUser, supabaseConfigured }: MapDiaryAppProp
   if (!state) {
     return <LoadingShell />;
   }
-
-  const stats = getStats(visibleEntries, userId);
 
   async function saveEntry(entryDraft: DraftEntry, files: FileList | null) {
     if (!state) return;
@@ -651,39 +657,115 @@ export function MapDiaryApp({ initialUser, supabaseConfigured }: MapDiaryAppProp
         })
         .map(directoryUserToFriend);
 
+  const handleViewChange = (view: ViewId) => {
+    setActiveView(view);
+    if (view !== "map") {
+      setDraftLocation(null);
+      setSelectedEntryId(null);
+    }
+  };
+
+  const handleSelectEntry = (entryId: string) => {
+    setSelectedEntryId(entryId);
+    setDraftLocation(null);
+    setActiveView("map");
+  };
+
+  const handleClearSelection = () => {
+    setSelectedEntryId(null);
+    setDraftLocation(null);
+  };
+
+  const handleAddPlaceHint = () => {
+    setActiveView("map");
+    setSelectedEntryId(null);
+    setDraftLocation(null);
+    showToast("Tap anywhere on the map to add a place");
+  };
+
+  const handleSync = () => {
+    captureAppEvent("sync_requested", {
+      source: "menu",
+      pending_changes: state.sync.pendingChanges,
+      sync_status: state.sync.status
+    });
+    void runSync(state);
+  };
+
+  const handleInstall = async () => {
+    if (!installPrompt) return;
+    await installPrompt.prompt();
+    setInstallPrompt(null);
+  };
+
+  const handleFriendQueryChange = (query: string) =>
+    setState((current) => (current ? { ...current, ui: { ...current.ui, friendQuery: query } } : current));
+
+  const handleToggleFollow = (friendId: string) =>
+    void persist(
+      (current) => ({
+        ...current,
+        friends: current.friends.map((friend) =>
+          friend.id === friendId ? { ...friend, following: !friend.following } : friend
+        )
+      }),
+      "Friend updated"
+    );
+
+  const handleToggleFeed = (friendId: string, visible: boolean) =>
+    void persist(
+      (current) => ({
+        ...current,
+        friends: current.friends.map((friend) =>
+          friend.id === friendId ? { ...friend, feedVisible: visible } : friend
+        )
+      }),
+      "Feed preference saved"
+    );
+
+  const handleExport = () => {
+    captureAppEvent("data_exported", {
+      entry_count: state.entries.length,
+      friend_count: state.friends.length,
+      photo_count: state.entries.reduce((total, entry) => total + entry.photos.length, 0)
+    });
+    exportData(state);
+  };
+
+  const handleImport = async (file: File) => {
+    const imported = normalizeState(JSON.parse(await file.text()) as Partial<AppState>);
+    setState(imported);
+    await writeState(imported);
+    captureAppEvent("data_imported", {
+      file_size: file.size,
+      entry_count: imported.entries.length,
+      friend_count: imported.friends.length,
+      photo_count: imported.entries.reduce((total, entry) => total + entry.photos.length, 0)
+    });
+    showToast("Data imported");
+  };
+
+  const syncStatus = isOnline ? state.sync.status : "offline";
+  const feedEntries = getFeedEntries(state, userId);
+
   return (
     <div
       className="flex h-[100dvh] overflow-hidden bg-[var(--canvas)] text-[var(--ink)]"
       style={themeToCssVars(state.settings.theme)}
     >
-      <SideNav
-        activeView={activeView}
-        user={state.profile}
-        isAuthenticated={isAuthenticated}
-        isLocalMode={!canUseCloud}
-        installable={Boolean(installPrompt)}
-        syncStatus={isOnline ? state.sync.status : "offline"}
-        onInstall={async () => {
-          if (!installPrompt) return;
-          await installPrompt.prompt();
-          setInstallPrompt(null);
-        }}
-        onSync={() => {
-          captureAppEvent("sync_requested", {
-            source: "side_nav",
-            pending_changes: state.sync.pendingChanges,
-            sync_status: state.sync.status
-          });
-          void runSync(state);
-        }}
-        onViewChange={(view) => {
-          setActiveView(view);
-          if (view !== "map") {
-            setDraftLocation(null);
-            setSelectedEntryId(null);
-          }
-        }}
-      />
+      {!isMobile ? (
+        <SideNav
+          activeView={activeView}
+          user={state.profile}
+          isAuthenticated={isAuthenticated}
+          isLocalMode={!canUseCloud}
+          installable={Boolean(installPrompt)}
+          syncStatus={syncStatus}
+          onInstall={handleInstall}
+          onSync={handleSync}
+          onViewChange={handleViewChange}
+        />
+      ) : null}
 
       <main className="relative min-w-0 flex-1 overflow-hidden">
         <DiaryLeafletMap
@@ -703,154 +785,122 @@ export function MapDiaryApp({ initialUser, supabaseConfigured }: MapDiaryAppProp
           }}
         />
 
-        <MapHud
-          stats={stats}
-          profileName={state.profile.displayName}
-          isLocalMode={!canUseCloud}
-          syncStatus={isOnline ? state.sync.status : "offline"}
-          locationQuery={locationQuery}
-          locationMatches={locationMatches}
-          onLocationQueryChange={setLocationQuery}
-          onChooseLocation={(location) => openLocationDraft(location, "search")}
-          onAddPlace={() => {
-            setActiveView("map");
-            setSelectedEntryId(null);
-            setDraftLocation(null);
-            showToast("Click anywhere on the map to add a place");
-          }}
-          onOpenPlaces={() => setActiveView("scrapbook")}
-        />
-
-        {activeView === "map" && (selectedEntry || draftLocation) ? (
-          <EditorPanel>
-            <EntryEditor
-              state={state}
-              currentUserId={userId}
-              selectedEntry={selectedEntry}
-              draftLocation={draftLocation}
-              onCancel={() => {
-                setSelectedEntryId(null);
-                setDraftLocation(null);
-              }}
-              onDelete={(entryId) => void deleteEntry(entryId)}
-              onRemovePhoto={(entryId, photoId) => void removePhoto(entryId, photoId)}
-              onSave={saveEntry}
-            />
-          </EditorPanel>
-        ) : null}
-
-        {activeView === "scrapbook" ? (
-          <PlaceListPanel
-            entries={listedEntries}
-            totalEntries={visibleEntries.length}
-            query={placeQuery}
-            sort={placeSort}
-            filter={placeFilter}
-            onQueryChange={setPlaceQuery}
-            onSortChange={setPlaceSort}
-            onFilterChange={setPlaceFilter}
-            onAddPlace={() => {
-              setActiveView("map");
-              setSelectedEntryId(null);
-              setDraftLocation(null);
-              showToast("Click the map to place the new memory");
-            }}
-            onOpenEntry={(entryId) => {
-              setSelectedEntryId(entryId);
-              setDraftLocation(null);
-              setActiveView("map");
-            }}
-          />
-        ) : null}
-
-        {activeView === "feed" ? (
-          <FeedPanel
+        {isMobile ? (
+          <MobileShell
             state={state}
-            entries={getFeedEntries(state, userId)}
-            currentUserId={userId}
-            onOpenEntry={(entryId) => {
-              setSelectedEntryId(entryId);
-              setDraftLocation(null);
-              setActiveView("map");
-            }}
-          />
-        ) : null}
-
-        {activeView === "friends" ? (
-          <FriendsPanel
-            state={state}
-            suggestions={friendSuggestions}
-            onQueryChange={(query) =>
-              setState((current) => (current ? { ...current, ui: { ...current.ui, friendQuery: query } } : current))
-            }
-            onAddFriend={(friend) => void addFriend(friend)}
-            onToggleFollow={(friendId) =>
-              void persist(
-                (current) => ({
-                  ...current,
-                  friends: current.friends.map((friend) =>
-                    friend.id === friendId ? { ...friend, following: !friend.following } : friend
-                  )
-                }),
-                "Friend updated"
-              )
-            }
-            onToggleFeed={(friendId, visible) =>
-              void persist(
-                (current) => ({
-                  ...current,
-                  friends: current.friends.map((friend) =>
-                    friend.id === friendId ? { ...friend, feedVisible: visible } : friend
-                  )
-                }),
-                "Feed preference saved"
-              )
-            }
-          />
-        ) : null}
-
-        {activeView === "settings" ? (
-          <SettingsPanel
-            state={state}
+            userId={userId}
+            activeView={activeView}
+            selectedEntry={selectedEntry}
+            draftLocation={draftLocation}
+            listedEntries={listedEntries}
+            visibleEntries={visibleEntries}
+            feedEntries={feedEntries}
+            friendSuggestions={friendSuggestions}
+            isAuthenticated={isAuthenticated}
+            isLocalMode={!canUseCloud}
             isCloudMode={canUseCloud}
             supabaseConfigured={supabaseConfigured}
+            syncStatus={syncStatus}
+            installable={Boolean(installPrompt)}
+            placeQuery={placeQuery}
+            placeSort={placeSort}
+            placeFilter={placeFilter}
+            locationQuery={locationQuery}
+            locationMatches={locationMatches}
+            onPlaceQueryChange={setPlaceQuery}
+            onPlaceSortChange={setPlaceSort}
+            onPlaceFilterChange={setPlaceFilter}
+            onLocationQueryChange={setLocationQuery}
+            onChooseLocation={(location) => openLocationDraft(location, "search")}
+            onViewChange={handleViewChange}
+            onSelectEntry={handleSelectEntry}
+            onClearSelection={handleClearSelection}
+            onSaveEntry={saveEntry}
+            onDeleteEntry={(id) => void deleteEntry(id)}
+            onRemovePhoto={(entryId, photoId) => void removePhoto(entryId, photoId)}
+            onAddPlaceHint={handleAddPlaceHint}
+            onFriendQueryChange={handleFriendQueryChange}
+            onAddFriend={(friend) => void addFriend(friend)}
+            onToggleFollow={handleToggleFollow}
+            onToggleFeed={handleToggleFeed}
+            onSync={handleSync}
+            onInstall={handleInstall}
             onProfileSave={(profile) => void saveProfile(profile)}
             onThemeChange={(theme) => void saveTheme(theme)}
-            onSync={() => {
-              captureAppEvent("sync_requested", {
-                source: "settings",
-                pending_changes: state.sync.pendingChanges,
-                sync_status: state.sync.status
-              });
-              void runSync(state);
-            }}
-            onExport={() => {
-              captureAppEvent("data_exported", {
-                entry_count: state.entries.length,
-                friend_count: state.friends.length,
-                photo_count: state.entries.reduce((total, entry) => total + entry.photos.length, 0)
-              });
-              exportData(state);
-            }}
-            onImport={async (file) => {
-              const imported = normalizeState(JSON.parse(await file.text()) as Partial<AppState>);
-              setState(imported);
-              await writeState(imported);
-              captureAppEvent("data_imported", {
-                file_size: file.size,
-                entry_count: imported.entries.length,
-                friend_count: imported.friends.length,
-                photo_count: imported.entries.reduce((total, entry) => total + entry.photos.length, 0)
-              });
-              showToast("Data imported");
-            }}
+            onExport={handleExport}
+            onImport={handleImport}
           />
-        ) : null}
+        ) : (
+          <>
+            <DesktopTopBar
+              locationQuery={locationQuery}
+              locationMatches={locationMatches}
+              onLocationQueryChange={setLocationQuery}
+              onChooseLocation={(location) => openLocationDraft(location, "search")}
+            />
+
+            {activeView === "map" && (selectedEntry || draftLocation) ? (
+              <EditorPanel>
+                <EntryEditor
+                  state={state}
+                  currentUserId={userId}
+                  selectedEntry={selectedEntry}
+                  draftLocation={draftLocation}
+                  onCancel={handleClearSelection}
+                  onDelete={(entryId) => void deleteEntry(entryId)}
+                  onRemovePhoto={(entryId, photoId) => void removePhoto(entryId, photoId)}
+                  onSave={saveEntry}
+                />
+              </EditorPanel>
+            ) : null}
+
+            {activeView === "scrapbook" ? (
+              <PlaceListPanel
+                entries={listedEntries}
+                totalEntries={visibleEntries.length}
+                query={placeQuery}
+                sort={placeSort}
+                filter={placeFilter}
+                onQueryChange={setPlaceQuery}
+                onSortChange={setPlaceSort}
+                onFilterChange={setPlaceFilter}
+                onAddPlace={handleAddPlaceHint}
+                onOpenEntry={handleSelectEntry}
+              />
+            ) : null}
+
+            {activeView === "feed" ? (
+              <FeedPanel state={state} entries={feedEntries} currentUserId={userId} onOpenEntry={handleSelectEntry} />
+            ) : null}
+
+            {activeView === "friends" ? (
+              <FriendsPanel
+                state={state}
+                suggestions={friendSuggestions}
+                onQueryChange={handleFriendQueryChange}
+                onAddFriend={(friend) => void addFriend(friend)}
+                onToggleFollow={handleToggleFollow}
+                onToggleFeed={handleToggleFeed}
+              />
+            ) : null}
+
+            {activeView === "settings" ? (
+              <SettingsPanel
+                state={state}
+                isCloudMode={canUseCloud}
+                supabaseConfigured={supabaseConfigured}
+                onProfileSave={(profile) => void saveProfile(profile)}
+                onThemeChange={(theme) => void saveTheme(theme)}
+                onSync={handleSync}
+                onExport={handleExport}
+                onImport={handleImport}
+              />
+            ) : null}
+          </>
+        )}
       </main>
 
-      <MobileNav activeView={activeView} onViewChange={setActiveView} />
-
-      <div className="pointer-events-none fixed bottom-5 left-1/2 z-[900] grid max-w-[calc(100vw-32px)] -translate-x-1/2 gap-2 max-md:bottom-24">
+      <div className="pointer-events-none fixed bottom-5 left-1/2 z-[900] grid max-w-[calc(100vw-32px)] -translate-x-1/2 gap-2">
         {toast ? (
           <div className="rounded-[50px] bg-[var(--inverse-canvas)] px-4 py-2 text-[var(--inverse-ink)] shadow-[0_4px_16px_rgba(0,0,0,0.12)]">
             {toast}
@@ -1006,117 +1056,6 @@ function SideNav({
   );
 }
 
-function MobileNav({ activeView, onViewChange }: { activeView: ViewId; onViewChange: (view: ViewId) => void }) {
-  return (
-    <nav className="fixed inset-x-3 bottom-3 z-[800] hidden grid-cols-5 rounded-[24px] border border-[var(--hairline)] bg-[var(--canvas)] p-1 shadow-[0_12px_40px_rgba(0,0,0,0.12)] max-md:grid">
-      {views.map((view) => {
-        const Icon = view.icon;
-        return (
-          <button
-            key={view.id}
-            className={`grid min-h-14 place-items-center rounded-[18px] text-xs ${activeView === view.id ? "bg-black text-white" : "text-black"}`}
-            onClick={() => onViewChange(view.id)}
-            aria-label={view.label}
-          >
-            <Icon className="size-5" />
-            <span>{view.label}</span>
-          </button>
-        );
-      })}
-    </nav>
-  );
-}
-
-function MapHud({
-  stats,
-  profileName,
-  isLocalMode,
-  syncStatus,
-  locationQuery,
-  locationMatches,
-  onLocationQueryChange,
-  onChooseLocation,
-  onAddPlace,
-  onOpenPlaces
-}: {
-  stats: ReturnType<typeof getStats>;
-  profileName: string;
-  isLocalMode: boolean;
-  syncStatus: AppState["sync"]["status"];
-  locationQuery: string;
-  locationMatches: DraftLocation[];
-  onLocationQueryChange: (query: string) => void;
-  onChooseLocation: (location: DraftLocation) => void;
-  onAddPlace: () => void;
-  onOpenPlaces: () => void;
-}) {
-  return (
-    <section className="pointer-events-none absolute left-5 top-5 z-[600] grid max-w-[560px] gap-3 max-md:left-3 max-md:right-3 max-md:top-3 max-md:max-w-none">
-      <div className="pointer-events-auto rounded-[24px] border border-[var(--hairline)] bg-[var(--canvas)] p-5 shadow-[0_12px_40px_rgba(0,0,0,0.08)] max-md:p-4">
-        <div className="mb-4 flex items-start justify-between gap-4">
-          <div>
-            <p className="mb-2 font-mono text-xs uppercase">Map</p>
-            <h1 className="text-4xl font-[340] leading-none max-md:text-3xl">Places you keep</h1>
-            <p className="mt-2 text-base leading-snug">{profileName}&apos;s private travel scrapbook.</p>
-          </div>
-          <Badge>{syncStatusLabel(syncStatus, isLocalMode)}</Badge>
-        </div>
-        <div className="grid grid-cols-3 gap-2">
-          <Stat value={stats.entries} label="spots" />
-          <Stat value={stats.shared} label="shared" />
-          <Stat value={stats.photos} label="photos" />
-        </div>
-        <form
-          className="relative mt-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            const first = locationMatches[0];
-            if (first) onChooseLocation(first);
-          }}
-        >
-          <Search className="pointer-events-none absolute left-3 top-3.5 size-4" />
-          <Input
-            aria-label="Search for a location"
-            className="pl-9"
-            value={locationQuery}
-            placeholder="Search Tokyo, Paris, Mumbai..."
-            onChange={(event) => onLocationQueryChange(event.target.value)}
-          />
-          {locationQuery.trim().length >= 2 ? (
-            <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-[680] overflow-hidden rounded-[12px] border border-[var(--hairline)] bg-[var(--canvas)] shadow-[0_16px_40px_rgba(0,0,0,0.14)]">
-              {locationMatches.length ? (
-                locationMatches.map((location) => (
-                  <button
-                    key={`${location.placeName}-${location.lat}-${location.lng}`}
-                    type="button"
-                    className="flex w-full items-center justify-between gap-3 border-b border-[var(--hairline-soft)] px-3 py-2.5 text-left last:border-b-0 hover:bg-[var(--surface-soft)]"
-                    onClick={() => onChooseLocation(location)}
-                  >
-                    <span className="font-semibold">{location.placeName}</span>
-                    <span className="font-mono text-xs text-black/60">{formatLatLng(location.lat, location.lng)}</span>
-                  </button>
-                ))
-              ) : (
-                <div className="px-3 py-3 text-sm">No offline match. Click the map to place it manually.</div>
-              )}
-            </div>
-          ) : null}
-        </form>
-        <div className="mt-4 flex flex-wrap gap-2">
-          <Button onClick={onAddPlace}>
-            <Plus className="size-4" />
-            Add place
-          </Button>
-          <Button variant="secondary" onClick={onOpenPlaces}>
-            <BookOpen className="size-4" />
-            List view
-          </Button>
-        </div>
-      </div>
-    </section>
-  );
-}
-
 function EditorPanel({ children }: { children: React.ReactNode }) {
   return (
     <aside className="absolute bottom-5 right-5 top-5 z-[650] w-[430px] overflow-y-auto rounded-[24px] border border-[var(--hairline)] bg-[var(--canvas)] shadow-[0_20px_70px_rgba(0,0,0,0.14)] max-md:inset-x-3 max-md:bottom-24 max-md:top-48 max-md:w-auto">
@@ -1145,6 +1084,650 @@ function OverlayPanel({
   );
 }
 
+function useIsMobile() {
+  const [isMobile, setIsMobile] = React.useState(false);
+
+  React.useEffect(() => {
+    const query = window.matchMedia("(max-width: 767px)");
+    const update = () => setIsMobile(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+
+  return isMobile;
+}
+
+interface MobileShellProps {
+  state: AppState;
+  userId: string;
+  activeView: ViewId;
+  selectedEntry: DiaryEntry | null;
+  draftLocation: DraftLocation | null;
+  listedEntries: DiaryEntry[];
+  visibleEntries: DiaryEntry[];
+  feedEntries: DiaryEntry[];
+  friendSuggestions: Friend[];
+  isAuthenticated: boolean;
+  isLocalMode: boolean;
+  isCloudMode: boolean;
+  supabaseConfigured: boolean;
+  syncStatus: AppState["sync"]["status"];
+  installable: boolean;
+  placeQuery: string;
+  placeSort: PlaceSort;
+  placeFilter: PlaceFilter;
+  locationQuery: string;
+  locationMatches: DraftLocation[];
+  onPlaceQueryChange: (query: string) => void;
+  onPlaceSortChange: (sort: PlaceSort) => void;
+  onPlaceFilterChange: (filter: PlaceFilter) => void;
+  onLocationQueryChange: (query: string) => void;
+  onChooseLocation: (location: DraftLocation) => void;
+  onViewChange: (view: ViewId) => void;
+  onSelectEntry: (id: string) => void;
+  onClearSelection: () => void;
+  onSaveEntry: (entry: DraftEntry, files: FileList | null) => Promise<void>;
+  onDeleteEntry: (entryId: string) => void;
+  onRemovePhoto: (entryId: string, photoId: string) => void;
+  onAddPlaceHint: () => void;
+  onFriendQueryChange: (query: string) => void;
+  onAddFriend: (friend: Friend) => void;
+  onToggleFollow: (userId: string) => void;
+  onToggleFeed: (userId: string, visible: boolean) => void;
+  onSync: () => void;
+  onInstall: () => void;
+  onProfileSave: (profile: Partial<AppState["profile"]>) => void;
+  onThemeChange: (theme: Partial<ThemeSettings>) => void;
+  onExport: () => void;
+  onImport: (file: File) => Promise<void>;
+}
+
+function MobileShell(props: MobileShellProps) {
+  const {
+    state,
+    userId,
+    activeView,
+    selectedEntry,
+    draftLocation,
+    listedEntries,
+    visibleEntries,
+    feedEntries,
+    friendSuggestions,
+    isAuthenticated,
+    isLocalMode,
+    isCloudMode,
+    supabaseConfigured,
+    syncStatus,
+    installable,
+    placeQuery,
+    placeSort,
+    placeFilter,
+    locationQuery,
+    locationMatches,
+    onPlaceQueryChange,
+    onPlaceSortChange,
+    onPlaceFilterChange,
+    onLocationQueryChange,
+    onChooseLocation,
+    onViewChange,
+    onSelectEntry,
+    onClearSelection,
+    onSaveEntry,
+    onDeleteEntry,
+    onRemovePhoto,
+    onAddPlaceHint,
+    onFriendQueryChange,
+    onAddFriend,
+    onToggleFollow,
+    onToggleFeed,
+    onSync,
+    onInstall,
+    onProfileSave,
+    onThemeChange,
+    onExport,
+    onImport
+  } = props;
+
+  const snapPoints = React.useMemo(() => ["92px", 0.5, 0.95] as Array<number | string>, []);
+  const [menuOpen, setMenuOpen] = React.useState(false);
+
+  const onMap = activeView === "map";
+  const hasFocus = Boolean(selectedEntry || draftLocation);
+
+  const targetSnap = !onMap ? snapPoints[2] : hasFocus ? snapPoints[1] : snapPoints[0];
+  const drawerKey = `${onMap}-${hasFocus}`;
+  const [snap, setSnap] = React.useState<number | string | null>(targetSnap);
+  const [lastKey, setLastKey] = React.useState(drawerKey);
+  if (lastKey !== drawerKey) {
+    setLastKey(drawerKey);
+    setSnap(targetSnap);
+  }
+
+  const drawerTitle = !onMap
+    ? views.find((view) => view.id === activeView)?.label ?? "Map Diary"
+    : selectedEntry
+      ? selectedEntry.title || selectedEntry.placeName
+      : draftLocation
+        ? "New place"
+        : `Your places · ${visibleEntries.length}`;
+
+  return (
+    <>
+      <MobileTopBar
+        locationQuery={locationQuery}
+        locationMatches={locationMatches}
+        onLocationQueryChange={onLocationQueryChange}
+        onChooseLocation={onChooseLocation}
+        onOpenMenu={() => setMenuOpen(true)}
+        userName={state.profile.displayName}
+        syncStatus={syncStatus}
+        isLocalMode={isLocalMode}
+      />
+
+      <Drawer
+        open
+        modal={false}
+        dismissible={false}
+        snapPoints={snapPoints}
+        activeSnapPoint={snap}
+        setActiveSnapPoint={setSnap}
+      >
+        <DrawerPortal>
+          <DrawerContent
+            withHandle
+            className="h-[95dvh] outline-none"
+            aria-describedby={undefined}
+          >
+            <DrawerTitle className="sr-only">{drawerTitle}</DrawerTitle>
+            <MobileDrawerBody
+              state={state}
+              userId={userId}
+              activeView={activeView}
+              selectedEntry={selectedEntry}
+              draftLocation={draftLocation}
+              listedEntries={listedEntries}
+              visibleEntries={visibleEntries}
+              feedEntries={feedEntries}
+              friendSuggestions={friendSuggestions}
+              isCloudMode={isCloudMode}
+              supabaseConfigured={supabaseConfigured}
+              placeQuery={placeQuery}
+              placeSort={placeSort}
+              placeFilter={placeFilter}
+              onPlaceQueryChange={onPlaceQueryChange}
+              onPlaceSortChange={onPlaceSortChange}
+              onPlaceFilterChange={onPlaceFilterChange}
+              onSelectEntry={onSelectEntry}
+              onClearSelection={onClearSelection}
+              onSaveEntry={onSaveEntry}
+              onDeleteEntry={onDeleteEntry}
+              onRemovePhoto={onRemovePhoto}
+              onAddPlaceHint={onAddPlaceHint}
+              onFriendQueryChange={onFriendQueryChange}
+              onAddFriend={onAddFriend}
+              onToggleFollow={onToggleFollow}
+              onToggleFeed={onToggleFeed}
+              onSync={onSync}
+              onProfileSave={onProfileSave}
+              onThemeChange={onThemeChange}
+              onExport={onExport}
+              onImport={onImport}
+              onExpand={() => setSnap(snapPoints[2])}
+              onPeek={() => setSnap(snapPoints[0])}
+            />
+          </DrawerContent>
+        </DrawerPortal>
+      </Drawer>
+
+      <Drawer
+        open={menuOpen}
+        onOpenChange={setMenuOpen}
+        direction="right"
+      >
+        <DrawerPortal>
+          <DrawerOverlay />
+          <DrawerContent withHandle={false} direction="right" className="p-5">
+            <DrawerTitle className="sr-only">Map Diary menu</DrawerTitle>
+            <MobileMenu
+              user={state.profile}
+              activeView={activeView}
+              syncStatus={syncStatus}
+              isAuthenticated={isAuthenticated}
+              isLocalMode={isLocalMode}
+              installable={installable}
+              onSync={onSync}
+              onInstall={onInstall}
+              onViewChange={(view) => {
+                onViewChange(view);
+                setMenuOpen(false);
+              }}
+            />
+          </DrawerContent>
+        </DrawerPortal>
+      </Drawer>
+    </>
+  );
+}
+
+function DesktopTopBar({
+  locationQuery,
+  locationMatches,
+  onLocationQueryChange,
+  onChooseLocation
+}: {
+  locationQuery: string;
+  locationMatches: DraftLocation[];
+  onLocationQueryChange: (query: string) => void;
+  onChooseLocation: (location: DraftLocation) => void;
+}) {
+  const showSuggestions = locationQuery.trim().length >= 2;
+  return (
+    <div className="pointer-events-none absolute left-1/2 top-5 z-[700] grid w-[min(520px,calc(100vw-260px))] -translate-x-1/2 gap-2">
+      <form
+        className="pointer-events-auto flex h-12 items-center gap-2 rounded-[50px] border border-[var(--hairline)] bg-[var(--canvas)] px-4 shadow-[0_4px_16px_rgba(0,0,0,0.06)]"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const first = locationMatches[0];
+          if (first) onChooseLocation(first);
+        }}
+      >
+        <Search className="size-4 shrink-0 text-black/55" aria-hidden />
+        <input
+          aria-label="Search a place"
+          className="min-h-9 w-full bg-transparent text-base font-[330] leading-snug placeholder:text-black/45 focus:outline-none"
+          value={locationQuery}
+          placeholder="Search a place"
+          onChange={(event) => onLocationQueryChange(event.target.value)}
+        />
+        {locationQuery ? (
+          <button
+            type="button"
+            aria-label="Clear search"
+            onClick={() => onLocationQueryChange("")}
+            className="grid size-7 shrink-0 place-items-center rounded-full text-black/55 transition hover:bg-[var(--surface-soft)] active:scale-[0.96]"
+          >
+            <X className="size-4" />
+          </button>
+        ) : null}
+      </form>
+
+      {showSuggestions ? (
+        <div className="pointer-events-auto overflow-hidden rounded-[24px] border border-[var(--hairline)] bg-[var(--canvas)] shadow-[0_8px_28px_rgba(0,0,0,0.08)]">
+          {locationMatches.length ? (
+            locationMatches.map((location) => (
+              <button
+                key={`${location.placeName}-${location.lat}-${location.lng}`}
+                type="button"
+                className="flex w-full items-center justify-between gap-3 border-b border-[var(--hairline-soft)] px-4 py-3 text-left last:border-b-0 hover:bg-[var(--surface-soft)]"
+                onClick={() => onChooseLocation(location)}
+              >
+                <span className="font-semibold">{location.placeName}</span>
+                <span className="font-mono text-xs text-black/60">{formatLatLng(location.lat, location.lng)}</span>
+              </button>
+            ))
+          ) : (
+            <div className="px-4 py-3 text-sm">No offline match. Click the map to place it manually.</div>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function MobileTopBar({
+  locationQuery,
+  locationMatches,
+  onLocationQueryChange,
+  onChooseLocation,
+  onOpenMenu,
+  userName,
+  syncStatus,
+  isLocalMode
+}: {
+  locationQuery: string;
+  locationMatches: DraftLocation[];
+  onLocationQueryChange: (query: string) => void;
+  onChooseLocation: (location: DraftLocation) => void;
+  onOpenMenu: () => void;
+  userName: string;
+  syncStatus: AppState["sync"]["status"];
+  isLocalMode: boolean;
+}) {
+  const showSuggestions = locationQuery.trim().length >= 2;
+
+  return (
+    <div
+      className="pointer-events-none absolute inset-x-3 top-3 z-[700] grid gap-2 md:left-1/2 md:right-auto md:top-5 md:w-[min(560px,calc(100vw-260px))] md:-translate-x-1/2"
+      style={{ paddingTop: "env(safe-area-inset-top)" }}
+    >
+      <form
+        className="pointer-events-auto flex h-12 items-center gap-2 rounded-[50px] border border-[var(--hairline)] bg-[var(--canvas)] pl-1.5 pr-3 shadow-[0_4px_16px_rgba(0,0,0,0.06)]"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const first = locationMatches[0];
+          if (first) onChooseLocation(first);
+        }}
+      >
+        <button
+          type="button"
+          aria-label="Open menu"
+          onClick={onOpenMenu}
+          className="grid size-9 shrink-0 place-items-center rounded-full bg-[var(--surface-soft)] text-xs font-[540] uppercase tracking-wide text-[var(--ink)] transition active:scale-[0.96]"
+          title={`${userName} · ${syncStatusLabel(syncStatus, isLocalMode)}`}
+        >
+          {initials(userName) || "MD"}
+        </button>
+        <input
+          aria-label="Search a place"
+          className="min-h-9 w-full bg-transparent text-base font-[330] leading-snug placeholder:text-black/45 focus:outline-none"
+          value={locationQuery}
+          placeholder="Search a place"
+          onChange={(event) => onLocationQueryChange(event.target.value)}
+        />
+        {locationQuery ? (
+          <button
+            type="button"
+            aria-label="Clear search"
+            onClick={() => onLocationQueryChange("")}
+            className="grid size-7 shrink-0 place-items-center rounded-full text-black/55 transition hover:bg-[var(--surface-soft)] active:scale-[0.96]"
+          >
+            <X className="size-4" />
+          </button>
+        ) : (
+          <Search className="size-4 shrink-0 text-black/55" aria-hidden />
+        )}
+      </form>
+
+      {showSuggestions ? (
+        <div className="pointer-events-auto overflow-hidden rounded-[24px] border border-[var(--hairline)] bg-[var(--canvas)] shadow-[0_8px_28px_rgba(0,0,0,0.08)]">
+          {locationMatches.length ? (
+            locationMatches.map((location) => (
+              <button
+                key={`${location.placeName}-${location.lat}-${location.lng}`}
+                type="button"
+                className="flex w-full items-center justify-between gap-3 border-b border-[var(--hairline-soft)] px-4 py-3 text-left last:border-b-0 hover:bg-[var(--surface-soft)]"
+                onClick={() => onChooseLocation(location)}
+              >
+                <span className="font-semibold">{location.placeName}</span>
+                <span className="font-mono text-xs text-black/60">{formatLatLng(location.lat, location.lng)}</span>
+              </button>
+            ))
+          ) : (
+            <div className="px-4 py-3 text-sm">No offline match. Tap the map to place it manually.</div>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function MobileMenu({
+  user,
+  activeView,
+  syncStatus,
+  isAuthenticated,
+  isLocalMode,
+  installable,
+  onSync,
+  onInstall,
+  onViewChange
+}: {
+  user: AppState["profile"];
+  activeView: ViewId;
+  syncStatus: AppState["sync"]["status"];
+  isAuthenticated: boolean;
+  isLocalMode: boolean;
+  installable: boolean;
+  onSync: () => void;
+  onInstall: () => void;
+  onViewChange: (view: ViewId) => void;
+}) {
+  return (
+    <div className="grid h-full content-start gap-4">
+      <div className="flex items-center gap-3">
+        <span className="grid size-11 place-items-center rounded-full bg-[var(--primary)] text-sm font-bold text-[var(--on-primary)]">
+          {initials(user.displayName) || "MD"}
+        </span>
+        <div>
+          <strong className="block text-lg leading-tight">{user.displayName}</strong>
+          <span className="text-sm text-black/60">@{user.username}</span>
+        </div>
+      </div>
+
+      <nav className="grid gap-1">
+        {views.map((view) => {
+          const Icon = view.icon;
+          return (
+            <Button
+              key={view.id}
+              variant={activeView === view.id ? "primary" : "ghost"}
+              className="justify-start"
+              onClick={() => onViewChange(view.id)}
+            >
+              <Icon className="size-4" />
+              {view.label}
+            </Button>
+          );
+        })}
+      </nav>
+
+      <div className="mt-auto grid gap-2 border-t border-[var(--hairline)] pt-4">
+        <Button variant="secondary" className="justify-start" onClick={onSync}>
+          {syncStatus === "offline" ? <WifiOff className="size-4" /> : <Cloud className="size-4" />}
+          {syncStatusLabel(syncStatus, isLocalMode)}
+        </Button>
+        {installable ? (
+          <Button variant="secondary" className="justify-start" onClick={onInstall}>
+            <Download className="size-4" />
+            Install app
+          </Button>
+        ) : null}
+        {isAuthenticated ? (
+          <form action="/auth/logout" method="post" onSubmit={resetPostHogUser}>
+            <Button type="submit" variant="secondary" className="w-full justify-start">
+              <LogOut className="size-4" />
+              Log out
+            </Button>
+          </form>
+        ) : (
+          <Badge>Local browser mode</Badge>
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface MobileDrawerBodyProps {
+  state: AppState;
+  userId: string;
+  activeView: ViewId;
+  selectedEntry: DiaryEntry | null;
+  draftLocation: DraftLocation | null;
+  listedEntries: DiaryEntry[];
+  visibleEntries: DiaryEntry[];
+  feedEntries: DiaryEntry[];
+  friendSuggestions: Friend[];
+  isCloudMode: boolean;
+  supabaseConfigured: boolean;
+  placeQuery: string;
+  placeSort: PlaceSort;
+  placeFilter: PlaceFilter;
+  onPlaceQueryChange: (query: string) => void;
+  onPlaceSortChange: (sort: PlaceSort) => void;
+  onPlaceFilterChange: (filter: PlaceFilter) => void;
+  onSelectEntry: (id: string) => void;
+  onClearSelection: () => void;
+  onSaveEntry: (entry: DraftEntry, files: FileList | null) => Promise<void>;
+  onDeleteEntry: (entryId: string) => void;
+  onRemovePhoto: (entryId: string, photoId: string) => void;
+  onAddPlaceHint: () => void;
+  onFriendQueryChange: (query: string) => void;
+  onAddFriend: (friend: Friend) => void;
+  onToggleFollow: (userId: string) => void;
+  onToggleFeed: (userId: string, visible: boolean) => void;
+  onSync: () => void;
+  onProfileSave: (profile: Partial<AppState["profile"]>) => void;
+  onThemeChange: (theme: Partial<ThemeSettings>) => void;
+  onExport: () => void;
+  onImport: (file: File) => Promise<void>;
+  onExpand: () => void;
+  onPeek: () => void;
+}
+
+function MobileDrawerBody(props: MobileDrawerBodyProps) {
+  const {
+    state,
+    userId,
+    activeView,
+    selectedEntry,
+    draftLocation,
+    listedEntries,
+    visibleEntries,
+    feedEntries,
+    friendSuggestions,
+    isCloudMode,
+    supabaseConfigured,
+    placeQuery,
+    placeSort,
+    placeFilter,
+    onPlaceQueryChange,
+    onPlaceSortChange,
+    onPlaceFilterChange,
+    onSelectEntry,
+    onClearSelection,
+    onSaveEntry,
+    onDeleteEntry,
+    onRemovePhoto,
+    onAddPlaceHint,
+    onFriendQueryChange,
+    onAddFriend,
+    onToggleFollow,
+    onToggleFeed,
+    onSync,
+    onProfileSave,
+    onThemeChange,
+    onExport,
+    onImport,
+    onExpand,
+    onPeek
+  } = props;
+
+  const onMap = activeView === "map";
+
+  if (!onMap) {
+    return (
+      <div className="grid h-full grid-rows-[auto_minmax(0,1fr)]">
+        <header className="flex items-start justify-between gap-3 px-5 pb-2 pt-3">
+          <div>
+            <p className="font-mono text-xs uppercase">{activeView}</p>
+            <h2 className="text-3xl font-[340] leading-none">
+              {activeView === "scrapbook"
+                ? "Saved list"
+                : activeView === "feed"
+                  ? "Common feed"
+                  : activeView === "friends"
+                    ? "Mates and feeds"
+                    : "Account and sync"}
+            </h2>
+          </div>
+          <Button variant="secondary" size="icon" aria-label="Close" onClick={onPeek}>
+            <X className="size-5" />
+          </Button>
+        </header>
+        <div className="overflow-y-auto px-5 pb-[calc(env(safe-area-inset-bottom)+16px)] pt-2">
+          {activeView === "scrapbook" ? (
+            <PlacesListBody
+              entries={listedEntries}
+              totalEntries={visibleEntries.length}
+              query={placeQuery}
+              sort={placeSort}
+              filter={placeFilter}
+              onQueryChange={onPlaceQueryChange}
+              onSortChange={onPlaceSortChange}
+              onFilterChange={onPlaceFilterChange}
+              onAddPlace={onAddPlaceHint}
+              onOpenEntry={onSelectEntry}
+            />
+          ) : null}
+          {activeView === "feed" ? (
+            <FeedBody state={state} entries={feedEntries} currentUserId={userId} onOpenEntry={onSelectEntry} />
+          ) : null}
+          {activeView === "friends" ? (
+            <FriendsBody
+              state={state}
+              suggestions={friendSuggestions}
+              onQueryChange={onFriendQueryChange}
+              onAddFriend={onAddFriend}
+              onToggleFollow={onToggleFollow}
+              onToggleFeed={onToggleFeed}
+            />
+          ) : null}
+          {activeView === "settings" ? (
+            <SettingsBody
+              state={state}
+              isCloudMode={isCloudMode}
+              supabaseConfigured={supabaseConfigured}
+              onProfileSave={onProfileSave}
+              onThemeChange={onThemeChange}
+              onSync={onSync}
+              onExport={onExport}
+              onImport={onImport}
+            />
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  if (selectedEntry || draftLocation) {
+    return (
+      <div className="grid h-full grid-rows-[auto_minmax(0,1fr)]" onPointerDown={onExpand}>
+        <div className="overflow-y-auto px-1 pb-[calc(env(safe-area-inset-bottom)+16px)] pt-1">
+          <EntryEditor
+            state={state}
+            currentUserId={userId}
+            selectedEntry={selectedEntry}
+            draftLocation={draftLocation}
+            onCancel={onClearSelection}
+            onDelete={onDeleteEntry}
+            onRemovePhoto={onRemovePhoto}
+            onSave={onSaveEntry}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid h-full grid-rows-[auto_minmax(0,1fr)]">
+      <button
+        type="button"
+        onClick={onExpand}
+        className="flex items-center justify-center gap-2 px-5 pb-2 pt-1 text-center"
+        aria-label="Expand your places"
+      >
+        <span className="font-mono text-[11px] uppercase tracking-[0.6px] text-black/60">Your places</span>
+        <span className="font-[340] text-base leading-none">· {visibleEntries.length}</span>
+      </button>
+      <div className="overflow-y-auto px-5 pb-[calc(env(safe-area-inset-bottom)+16px)] pt-2">
+        <PlacesListBody
+          entries={listedEntries}
+          totalEntries={visibleEntries.length}
+          query={placeQuery}
+          sort={placeSort}
+          filter={placeFilter}
+          onQueryChange={onPlaceQueryChange}
+          onSortChange={onPlaceSortChange}
+          onFilterChange={onPlaceFilterChange}
+          onAddPlace={onAddPlaceHint}
+          onOpenEntry={onSelectEntry}
+        />
+      </div>
+    </div>
+  );
+}
+
 function LoadingShell() {
   return (
     <main className="grid min-h-[100dvh] place-items-center bg-[var(--surface-soft)] px-6">
@@ -1164,15 +1747,6 @@ function MapLoading() {
         <Map className="mx-auto size-6" />
         <p className="font-mono text-xs uppercase">Loading map</p>
       </div>
-    </div>
-  );
-}
-
-function Stat({ value, label }: { value: number; label: string }) {
-  return (
-    <div className="rounded-[8px] border border-black/10 bg-[var(--surface-soft)] p-3">
-      <strong className="block font-mono text-2xl font-normal leading-none">{value}</strong>
-      <span className="mt-1 block text-sm">{label}</span>
     </div>
   );
 }
@@ -1426,18 +2000,7 @@ function EntryEditor({
   );
 }
 
-function PlaceListPanel({
-  entries,
-  totalEntries,
-  query,
-  sort,
-  filter,
-  onQueryChange,
-  onSortChange,
-  onFilterChange,
-  onAddPlace,
-  onOpenEntry
-}: {
+interface PlacesListBodyProps {
   entries: DiaryEntry[];
   totalEntries: number;
   query: string;
@@ -1448,52 +2011,71 @@ function PlaceListPanel({
   onFilterChange: (filter: PlaceFilter) => void;
   onAddPlace: () => void;
   onOpenEntry: (entryId: string) => void;
-}) {
+}
+
+export function PlacesListBody({
+  entries,
+  totalEntries,
+  query,
+  sort,
+  filter,
+  onQueryChange,
+  onSortChange,
+  onFilterChange,
+  onAddPlace,
+  onOpenEntry
+}: PlacesListBodyProps) {
+  return (
+    <div className="grid gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Badge>{entries.length} shown</Badge>
+        <Badge>{totalEntries} total</Badge>
+        <Button size="sm" onClick={onAddPlace}>
+          <Plus className="size-4" />
+          Add
+        </Button>
+      </div>
+
+      <Field label="Search places" htmlFor="place-search">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2" />
+          <Input id="place-search" className="pl-9" value={query} onChange={(event) => onQueryChange(event.target.value)} />
+        </div>
+      </Field>
+
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Sort" htmlFor="place-sort">
+          <Select id="place-sort" value={sort} onChange={(event) => onSortChange(event.target.value as PlaceSort)}>
+            <option value="updated">Recently updated</option>
+            <option value="created">Newest added</option>
+            <option value="name">Place name</option>
+          </Select>
+        </Field>
+        <Field label="Filter" htmlFor="place-filter">
+          <Select id="place-filter" value={filter} onChange={(event) => onFilterChange(event.target.value as PlaceFilter)}>
+            <option value="all">All places</option>
+            <option value="private">Private</option>
+            <option value="shared">Shared</option>
+            <option value="with-photos">With photos</option>
+          </Select>
+        </Field>
+      </div>
+
+      <div className="grid gap-3">
+        {entries.length ? (
+          entries.map((entry) => <EntryCard key={entry.id} entry={entry} onOpen={() => onOpenEntry(entry.id)} />)
+        ) : (
+          <p className="rounded-[8px] bg-[var(--surface-soft)] p-4">No places match this search.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PlaceListPanel(props: PlacesListBodyProps) {
   return (
     <OverlayPanel eyebrow="Places" title="Saved list">
-      <div className="grid gap-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <Badge>{entries.length} shown</Badge>
-          <Badge>{totalEntries} total</Badge>
-          <Button size="sm" onClick={onAddPlace}>
-            <Plus className="size-4" />
-            Add
-          </Button>
-        </div>
-
-        <Field label="Search places" htmlFor="place-search">
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2" />
-            <Input id="place-search" className="pl-9" value={query} onChange={(event) => onQueryChange(event.target.value)} />
-          </div>
-        </Field>
-
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Sort" htmlFor="place-sort">
-            <Select id="place-sort" value={sort} onChange={(event) => onSortChange(event.target.value as PlaceSort)}>
-              <option value="updated">Recently updated</option>
-              <option value="created">Newest added</option>
-              <option value="name">Place name</option>
-            </Select>
-          </Field>
-          <Field label="Filter" htmlFor="place-filter">
-            <Select id="place-filter" value={filter} onChange={(event) => onFilterChange(event.target.value as PlaceFilter)}>
-              <option value="all">All places</option>
-              <option value="private">Private</option>
-              <option value="shared">Shared</option>
-              <option value="with-photos">With photos</option>
-            </Select>
-          </Field>
-        </div>
-
-        <div className="grid gap-3">
-          {entries.length ? (
-            entries.map((entry) => <EntryCard key={entry.id} entry={entry} onOpen={() => onOpenEntry(entry.id)} />)
-          ) : (
-            <p className="rounded-[8px] bg-[var(--surface-soft)] p-4">No places match this search.</p>
-          )}
-        </div>
-      </div>
+      <PlacesListBody {...props} />
     </OverlayPanel>
   );
 }
@@ -1524,19 +2106,16 @@ function EntryCard({ entry, onOpen }: { entry: DiaryEntry; onOpen: () => void })
   );
 }
 
-function FeedPanel({
-  state,
-  entries,
-  currentUserId,
-  onOpenEntry
-}: {
+interface FeedBodyProps {
   state: AppState;
   entries: DiaryEntry[];
   currentUserId: string;
   onOpenEntry: (entryId: string) => void;
-}) {
+}
+
+export function FeedBody({ state, entries, currentUserId, onOpenEntry }: FeedBodyProps) {
   return (
-    <OverlayPanel eyebrow="Feed" title="Common feed">
+    <>
       <div className="grid gap-3">
         {entries.length ? (
           entries.map((entry) => {
@@ -1573,30 +2152,39 @@ function FeedPanel({
           <p className="rounded-[8px] bg-[var(--surface-soft)] p-4">No visible friend activity yet.</p>
         )}
       </div>
+    </>
+  );
+}
+
+function FeedPanel(props: FeedBodyProps) {
+  return (
+    <OverlayPanel eyebrow="Feed" title="Common feed">
+      <FeedBody {...props} />
     </OverlayPanel>
   );
 }
 
-function FriendsPanel({
-  state,
-  suggestions,
-  onQueryChange,
-  onAddFriend,
-  onToggleFollow,
-  onToggleFeed
-}: {
+interface FriendsBodyProps {
   state: AppState;
   suggestions: Friend[];
   onQueryChange: (query: string) => void;
   onAddFriend: (friend: Friend) => void;
   onToggleFollow: (userId: string) => void;
   onToggleFeed: (userId: string, visible: boolean) => void;
-}) {
+}
+
+export function FriendsBody({
+  state,
+  suggestions,
+  onQueryChange,
+  onAddFriend,
+  onToggleFollow,
+  onToggleFeed
+}: FriendsBodyProps) {
   const query = state.ui.friendQuery;
 
   return (
-    <OverlayPanel eyebrow="Friends" title="Mates and feeds">
-      <div className="grid gap-5">
+    <div className="grid gap-5">
         <Field label="Search username or email" htmlFor="friend-search">
           <Input id="friend-search" value={query} onChange={(event) => onQueryChange(event.target.value)} />
         </Field>
@@ -1662,20 +2250,18 @@ function FriendsPanel({
           )}
         </section>
       </div>
+  );
+}
+
+function FriendsPanel(props: FriendsBodyProps) {
+  return (
+    <OverlayPanel eyebrow="Friends" title="Mates and feeds">
+      <FriendsBody {...props} />
     </OverlayPanel>
   );
 }
 
-function SettingsPanel({
-  state,
-  isCloudMode,
-  supabaseConfigured,
-  onProfileSave,
-  onThemeChange,
-  onSync,
-  onExport,
-  onImport
-}: {
+interface SettingsBodyProps {
   state: AppState;
   isCloudMode: boolean;
   supabaseConfigured: boolean;
@@ -1684,14 +2270,24 @@ function SettingsPanel({
   onSync: () => void;
   onExport: () => void;
   onImport: (file: File) => Promise<void>;
-}) {
+}
+
+export function SettingsBody({
+  state,
+  isCloudMode,
+  supabaseConfigured,
+  onProfileSave,
+  onThemeChange,
+  onSync,
+  onExport,
+  onImport
+}: SettingsBodyProps) {
   const storageBytes = new Blob([JSON.stringify(state)]).size;
   const photoCount = state.entries.reduce((total, entry) => total + entry.photos.length, 0);
   const theme = state.settings.theme;
 
   return (
-    <OverlayPanel eyebrow="Settings" title="Account and sync">
-      <div className="grid gap-5">
+    <div className="grid gap-5">
         <form
           className="grid gap-4"
           onSubmit={(event) => {
@@ -1872,6 +2468,13 @@ function SettingsPanel({
           </div>
         </section>
       </div>
+  );
+}
+
+function SettingsPanel(props: SettingsBodyProps) {
+  return (
+    <OverlayPanel eyebrow="Settings" title="Account and sync">
+      <SettingsBody {...props} />
     </OverlayPanel>
   );
 }
@@ -1929,14 +2532,6 @@ function getFeedEntries(state: AppState, currentUserId: string) {
       return entry.visibility === "friends" || entry.mates.includes(currentUserId);
     })
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-}
-
-function getStats(entries: DiaryEntry[], currentUserId: string) {
-  return {
-    entries: entries.length,
-    shared: entries.filter((entry) => entry.mates.length || entry.ownerId !== currentUserId).length,
-    photos: entries.reduce((total, entry) => total + entry.photos.length, 0)
-  };
 }
 
 function getUser(state: AppState, id: string, currentUserId: string) {
