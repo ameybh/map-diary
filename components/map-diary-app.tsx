@@ -228,7 +228,26 @@ export function MapDiaryApp({ initialUser, supabaseConfigured }: MapDiaryAppProp
 
   React.useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+
+    let refreshing = false;
+    const shouldRefresh = Boolean(navigator.serviceWorker.controller);
+    const handleControllerChange = () => {
+      if (!shouldRefresh) return;
+      if (refreshing) return;
+      refreshing = true;
+      window.location.reload();
+    };
+
+    navigator.serviceWorker.addEventListener("controllerchange", handleControllerChange);
+
+    navigator.serviceWorker
+      .register("/sw.js", { updateViaCache: "none" })
+      .then((registration) => registration.update())
+      .catch(() => undefined);
+
+    return () => {
+      navigator.serviceWorker.removeEventListener("controllerchange", handleControllerChange);
+    };
   }, []);
 
   React.useEffect(() => {
