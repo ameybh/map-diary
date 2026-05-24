@@ -187,13 +187,19 @@ img {
 }
 
 @media (max-width: 768px) {
-  .map-shell,
-  .diary-leaflet-map {
+  .map-shell:not(.fullscreen-map),
+  .map-shell:not(.fullscreen-map) .diary-leaflet-map {
     min-height: 360px;
   }
 
-  .map-shell {
+  .map-shell:not(.fullscreen-map) {
     border-radius: var(--radius-md);
+  }
+
+  .map-shell.fullscreen-map,
+  .map-shell.fullscreen-map .diary-leaflet-map {
+    height: 100dvh;
+    min-height: 100dvh;
   }
 }
 

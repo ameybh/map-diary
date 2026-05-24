@@ -3,7 +3,7 @@
 import Image from "next/image";
 import * as React from "react";
 import L, { type DivIcon } from "leaflet";
-import { MapContainer, Marker, TileLayer, Tooltip, useMapEvents } from "react-leaflet";
+import { MapContainer, Marker, TileLayer, Tooltip, useMap, useMapEvents } from "react-leaflet";
 import type { DiaryEntry, EntryIcon, EntryPhoto, Friend, MapTileStyle } from "@/lib/types";
 import { inferLocation, type DraftLocation } from "@/lib/map";
 import { cn } from "@/lib/utils";
@@ -53,12 +53,23 @@ export function DiaryLeafletMap({
   className
 }: DiaryLeafletMapProps) {
   const tileStyle = TILE_STYLES[mapStyle] ?? TILE_STYLES.colorful;
+  const selectedEntry = React.useMemo(
+    () => (selectedEntryId ? entries.find((entry) => entry.id === selectedEntryId) ?? null : null),
+    [entries, selectedEntryId]
+  );
   const center = React.useMemo<[number, number]>(() => {
     if (!entries.length) return [20, 20];
-    const selected = entries.find((entry) => entry.id === selectedEntryId);
-    const entry = selected ?? entries[entries.length - 1];
+    const entry = selectedEntry ?? entries[entries.length - 1];
     return [entry.lat, entry.lng];
-  }, [entries, selectedEntryId]);
+  }, [entries, selectedEntry]);
+  const [isCoarsePointer, setIsCoarsePointer] = React.useState(false);
+  React.useEffect(() => {
+    const query = window.matchMedia("(pointer: coarse)");
+    const update = () => setIsCoarsePointer(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
 
   return (
     <div className={cn("map-shell relative", className)} aria-label="Interactive world map">
@@ -86,6 +97,7 @@ export function DiaryLeafletMap({
           maxNativeZoom={tileStyle.maxNativeZoom}
         />
         <MapEvents onPickLocation={onPickLocation} />
+        <MapSelectionSync entry={selectedEntry} isCoarsePointer={isCoarsePointer} />
         {entries.map((entry) => (
           <Marker
             key={entry.id}
@@ -95,9 +107,11 @@ export function DiaryLeafletMap({
               click: () => onSelectEntry(entry.id)
             }}
           >
-            <Tooltip direction="top" offset={[0, -18]} opacity={1} className="diary-pin-tooltip">
-              <PinTooltip entry={entry} friends={friends} currentUserId={currentUserId} />
-            </Tooltip>
+            {isCoarsePointer ? null : (
+              <Tooltip direction="top" offset={[0, -18]} opacity={1} className="diary-pin-tooltip">
+                <PinTooltip entry={entry} friends={friends} currentUserId={currentUserId} />
+              </Tooltip>
+            )}
           </Marker>
         ))}
       </MapContainer>
@@ -114,6 +128,38 @@ function MapEvents({ onPickLocation }: { onPickLocation: (location: DraftLocatio
       onPickLocation(inferLocation(event.latlng.lat, event.latlng.lng));
     }
   });
+
+  return null;
+}
+
+function MapSelectionSync({
+  entry,
+  isCoarsePointer
+}: {
+  entry: DiaryEntry | null;
+  isCoarsePointer: boolean;
+}) {
+  const map = useMap();
+  const lastId = React.useRef<string | null>(null);
+
+  React.useEffect(() => {
+    if (!entry) {
+      lastId.current = null;
+      return;
+    }
+    if (lastId.current === entry.id) return;
+    lastId.current = entry.id;
+
+    const zoom = Math.max(map.getZoom(), 6);
+    if (isCoarsePointer) {
+      const point = map.project([entry.lat, entry.lng], zoom);
+      const drawerOffsetPx = Math.round(window.innerHeight * 0.22);
+      const target = map.unproject([point.x, point.y + drawerOffsetPx], zoom);
+      map.setView(target, zoom, { animate: true });
+    } else {
+      map.setView([entry.lat, entry.lng], zoom, { animate: true });
+    }
+  }, [entry, isCoarsePointer, map]);
 
   return null;
 }
